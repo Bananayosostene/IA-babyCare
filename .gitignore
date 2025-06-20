@@ -1,0 +1,55 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.Python
+env/
+venv/
+ENV/
+*.env
+*.sqlite3
+*.log
+baby_monitor_env/
+
+# === Django ===
+db.sqlite3
+media/
+staticfiles/
+local_settings.py
+*.pot
+*.pyc
+.DS_Store
+
+# === IDEs ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === OS ===
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# === Git ===
+*.orig
+*.rej
+*.bak
+
+# === Secrets and Credentials ===
+.env
+.env.*
+
+# === Node Modules (if using JS in Django admin) ===
+node_modules/
+
+# === Migrations (optional if regenerated often) ===
+*/migrations/__pycache__/
+*/migrations/*.pyc
+*/migrations/*.pyo
+*/migrations/*.pyd
+*/migrations/*.log
