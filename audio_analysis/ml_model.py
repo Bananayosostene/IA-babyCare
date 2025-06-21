@@ -232,5 +232,4 @@ class AudioAnalyzer:
         return self.predict(audio_data)
 
 # Create global analyzer instance
-# analyzer = AudioAnalyzer()
 analyzer = AudioAnalyzer(r"C:\Users\B Sostene\Desktop\norsken\baby_care_backend\models\model.keras")

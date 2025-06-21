@@ -2,10 +2,11 @@ from django.db import models
 import uuid
 
 class BabyState(models.TextChoices):
-    CRYING = 'crying', 'Crying'
-    LAUGHING = 'laughing', 'Laughing'
-    CALM = 'calm', 'Calm'
-    NEUTRAL = 'neutral', 'Neutral'
+    CRYING = 'cry', 'Cry'
+    HUNGRY = 'hungry', 'Hungry'
+    LAUGHING = 'laugh', 'laugh'
+    CALM = 'noise', 'noise'
+    NEUTRAL = 'silence', 'silence'
 
 class AudioSessionStatus(models.TextChoices):
     ACTIVE = 'active', 'Active'

@@ -14,14 +14,175 @@ import time
 import logging
 import os
 import tempfile
+import subprocess
+import mimetypes
+from pydub import AudioSegment
+from pydub.exceptions import CouldntDecodeError
 
 logger = logging.getLogger(__name__)
 
+# Supported audio formats for conversion
+SUPPORTED_AUDIO_FORMATS = ['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma', '.webm']
+
+def convert_audio_to_wav(input_path, output_path=None):
+    """
+    Convert audio file to WAV format using pydub
+    
+    Args:
+        input_path (str): Path to the input audio file
+        output_path (str): Optional path for output WAV file. If None, generates a temp path
+        
+    Returns:
+        str: Path to the converted WAV file
+        
+    Raises:
+        Exception: If conversion fails
+    """
+    try:
+        if output_path is None:
+            output_path = os.path.splitext(input_path)[0] + '_converted.wav'
+        
+        # Load audio file using pydub
+        audio = AudioSegment.from_file(input_path)
+        
+        # Convert to WAV with standard parameters for ML model
+        audio = audio.set_frame_rate(16000)  # Standard sample rate for audio ML models
+        audio = audio.set_channels(1)        # Mono channel
+        audio = audio.set_sample_width(2)    # 16-bit
+        
+        # Export as WAV
+        audio.export(output_path, format="wav")
+        
+        logger.info(f"Successfully converted {input_path} to {output_path}")
+        return output_path
+        
+    except CouldntDecodeError as e:
+        logger.error(f"Could not decode audio file {input_path}: {e}")
+        raise Exception(f"Unsupported audio format or corrupted file: {e}")
+    except Exception as e:
+        logger.error(f"Error converting audio file {input_path}: {e}")
+        raise Exception(f"Audio conversion failed: {e}")
+
+def convert_audio_to_wav_ffmpeg(input_path, output_path=None):
+    """
+    Alternative conversion method using FFmpeg (fallback option)
+    
+    Args:
+        input_path (str): Path to the input audio file
+        output_path (str): Optional path for output WAV file
+        
+    Returns:
+        str: Path to the converted WAV file
+        
+    Raises:
+        Exception: If conversion fails
+    """
+    try:
+        if output_path is None:
+            output_path = os.path.splitext(input_path)[0] + '_converted.wav'
+        
+        # FFmpeg command to convert to WAV with ML-friendly parameters
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-ar', '16000',  # Sample rate 16kHz
+            '-ac', '1',      # Mono channel
+            '-sample_fmt', 's16',  # 16-bit
+            '-y',           # Overwrite output file
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+        
+        logger.info(f"Successfully converted {input_path} to {output_path} using FFmpeg")
+        return output_path
+        
+    except subprocess.TimeoutExpired:
+        raise Exception("Audio conversion timed out")
+    except FileNotFoundError:
+        raise Exception("FFmpeg not found. Please install FFmpeg or use pydub conversion method")
+    except Exception as e:
+        logger.error(f"FFmpeg conversion error: {e}")
+        raise Exception(f"Audio conversion failed: {e}")
+
+def get_audio_format(file_path_or_name):
+    """
+    Determine audio format from file path or name
+    
+    Args:
+        file_path_or_name (str): File path or filename
+        
+    Returns:
+        str: File extension (e.g., '.mp3', '.wav')
+    """
+    return os.path.splitext(file_path_or_name.lower())[1]
+
+def process_audio_file(audio_file, temp_dir):
+    """
+    Process uploaded audio file - convert to WAV if necessary
+    
+    Args:
+        audio_file: Django uploaded file object
+        temp_dir (str): Directory for temporary files
+        
+    Returns:
+        tuple: (wav_file_path, needs_cleanup)
+    """
+    file_extension = get_audio_format(audio_file.name)
+    
+    # Generate temp file path
+    temp_file_path = os.path.join(temp_dir, f"temp_audio_{int(time.time())}{file_extension}")
+    
+    # Save uploaded file
+    with open(temp_file_path, 'wb+') as destination:
+        for chunk in audio_file.chunks():
+            destination.write(chunk)
+    
+    # If already WAV, return as-is
+    if file_extension == '.wav':
+        return temp_file_path, True
+    
+    # Convert to WAV
+    wav_file_path = os.path.join(temp_dir, f"converted_audio_{int(time.time())}.wav")
+    
+    try:
+        # Try pydub first
+        convert_audio_to_wav(temp_file_path, wav_file_path)
+        # Clean up original file
+        try:
+            os.remove(temp_file_path)
+        except:
+            pass
+        return wav_file_path, True
+    except Exception as e:
+        # Try FFmpeg as fallback
+        try:
+            convert_audio_to_wav_ffmpeg(temp_file_path, wav_file_path)
+            # Clean up original file
+            try:
+                os.remove(temp_file_path)
+            except:
+                pass
+            return wav_file_path, True
+        except Exception as ffmpeg_error:
+            # Clean up files
+            try:
+                os.remove(temp_file_path)
+            except:
+                pass
+            try:
+                os.remove(wav_file_path)
+            except:
+                pass
+            raise Exception(f"Failed to convert audio: {str(e)}. FFmpeg fallback also failed: {str(ffmpeg_error)}")
+
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Changed for testing - you can add authentication later
+@permission_classes([AllowAny])
 def predict_audio(request):
     """
-    Predict audio class from uploaded audio file
+    Predict audio class from uploaded audio file (supports multiple formats)
     """
     start_time = time.time()
     
@@ -34,31 +195,40 @@ def predict_audio(request):
             )
         
         audio_file = request.FILES['audio_file']
+        file_extension = get_audio_format(audio_file.name)
         
         # Validate file extension
-        if not audio_file.name.lower().endswith('.wav'):
+        if file_extension not in SUPPORTED_AUDIO_FORMATS:
             return Response(
-                {'error': 'Only WAV format is supported'},
+                {
+                    'error': f'Unsupported audio format: {file_extension}',
+                    'supported_formats': SUPPORTED_AUDIO_FORMATS
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Save uploaded file temporarily
-        # temp_dir = '/tmp'  
+        # Process audio file (convert if necessary)
         temp_dir = tempfile.gettempdir()
-        temp_file_path = os.path.join(temp_dir, f"temp_audio_{int(time.time())}.wav")
-        
-        with open(temp_file_path, 'wb+') as destination:
-            for chunk in audio_file.chunks():
-                destination.write(chunk)
+        try:
+            wav_file_path, needs_cleanup = process_audio_file(audio_file, temp_dir)
+        except Exception as e:
+            return Response(
+                {
+                    'error': f'Audio processing failed: {str(e)}',
+                    'original_format': file_extension
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         # Make prediction
-        prediction_result = analyzer.predict(temp_file_path)
+        prediction_result = analyzer.predict(wav_file_path)
         
         # Clean up temp file
-        try:
-            os.remove(temp_file_path)
-        except:
-            pass
+        if needs_cleanup:
+            try:
+                os.remove(wav_file_path)
+            except:
+                pass
         
         processing_time = time.time() - start_time
         
@@ -73,6 +243,7 @@ def predict_audio(request):
         
         # Log the prediction
         logger.info(f"Audio prediction completed: "
+                   f"original_format={file_extension}, "
                    f"class={prediction_result['state']}, "
                    f"confidence={prediction_result['confidence']:.2f}, "
                    f"processing_time={processing_time:.3f}s")
@@ -82,6 +253,8 @@ def predict_audio(request):
             'confidence': prediction_result['confidence'],
             'probabilities': prediction_result['probabilities'],
             'processing_time': round(processing_time, 3),
+            'original_format': file_extension,
+            'converted_to_wav': file_extension != '.wav',
             'timestamp': timezone.now().isoformat()
         })
         
@@ -105,13 +278,19 @@ def test_audio_prediction(request):
         test_audio_path = request.data.get('test_file_path')
         
         if not test_audio_path:
-            # Try common test file locations
-            possible_paths = [
-                os.path.join(os.getcwd(), 'test_audio', '3-152007-B.wav'),
-                os.path.join(os.getcwd(), 'media', 'test_audio', '3-152007-B.wav'),
-                r'C:\Users\B Sostene\Desktop\norsken\baby_care_backend\test_audio\3-152007-B.wav',
-                '/test_audio/3-152007-B.wav'  # Original path
+            # Try common test file locations with multiple formats
+            possible_paths = []
+            base_paths = [
+                os.path.join(os.getcwd(), 'test_audio', '3-152007-B'),
+                os.path.join(os.getcwd(), 'media', 'test_audio', '3-152007-B'),
+                r'C:\Users\B Sostene\Desktop\norsken\baby_care_backend\test_audio\3-152007-B',
+                '/test_audio/3-152007-B'
             ]
+            
+            # Add all supported formats to each base path
+            for base_path in base_paths:
+                for ext in SUPPORTED_AUDIO_FORMATS:
+                    possible_paths.append(base_path + ext)
             
             test_audio_path = None
             for path in possible_paths:
@@ -130,23 +309,52 @@ def test_audio_prediction(request):
             available_files = []
             for search_dir in search_dirs:
                 if os.path.exists(search_dir):
-                    files = [f for f in os.listdir(search_dir) if f.endswith(('.wav', '.m4a'))]
+                    files = [f for f in os.listdir(search_dir) 
+                            if get_audio_format(f) in SUPPORTED_AUDIO_FORMATS]
                     available_files.extend([os.path.join(search_dir, f) for f in files])
             
             error_msg = f'Test audio file not found. '
             if available_files:
-                error_msg += f'Available test files: {available_files[:5]}'  # Show first 5
+                error_msg += f'Available test files: {available_files[:5]}'
             else:
                 error_msg += 'No test audio files found in common directories. '
-                error_msg += 'Please provide test_file_path in request body or place test files in test_audio/ directory.'
+                error_msg += f'Supported formats: {SUPPORTED_AUDIO_FORMATS}'
             
             return Response(
                 {'error': error_msg, 'searched_paths': possible_paths if not test_audio_path else [test_audio_path]},
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Check if conversion is needed
+        file_extension = get_audio_format(test_audio_path)
+        wav_file_path = test_audio_path
+        needs_cleanup = False
+        
+        if file_extension != '.wav':
+            # Convert to WAV
+            temp_dir = tempfile.gettempdir()
+            wav_file_path = os.path.join(temp_dir, f"test_converted_{int(time.time())}.wav")
+            try:
+                convert_audio_to_wav(test_audio_path, wav_file_path)
+                needs_cleanup = True
+            except Exception as e:
+                return Response(
+                    {
+                        'error': f'Failed to convert test audio file: {str(e)}',
+                        'original_format': file_extension
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         # Make prediction
-        prediction_result = analyzer.predict(test_audio_path)
+        prediction_result = analyzer.predict(wav_file_path)
+        
+        # Clean up converted file if needed
+        if needs_cleanup:
+            try:
+                os.remove(wav_file_path)
+            except:
+                pass
         
         processing_time = time.time() - start_time
         
@@ -160,11 +368,14 @@ def test_audio_prediction(request):
             )
         
         logger.info(f"Test audio prediction completed: "
+                   f"original_format={file_extension}, "
                    f"class={prediction_result['state']}, "
                    f"confidence={prediction_result['confidence']:.2f}")
         
         return Response({
             'test_file': test_audio_path,
+            'original_format': file_extension,
+            'converted_to_wav': file_extension != '.wav',
             'predicted_class': prediction_result['state'],
             'confidence': prediction_result['confidence'],
             'probabilities': prediction_result['probabilities'],
@@ -179,12 +390,11 @@ def test_audio_prediction(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-# Alternative: File upload version of test endpoint
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def test_audio_prediction_upload(request):
     """
-    Test prediction by uploading a test audio file
+    Test prediction by uploading a test audio file (supports multiple formats)
     """
     start_time = time.time()
     
@@ -192,36 +402,48 @@ def test_audio_prediction_upload(request):
         # Check if audio file is provided
         if 'test_audio_file' not in request.FILES:
             return Response(
-                {'error': 'No test audio file provided. Please upload a test audio file using "test_audio_file" field.'},
+                {
+                    'error': 'No test audio file provided. Please upload a test audio file using "test_audio_file" field.',
+                    'supported_formats': SUPPORTED_AUDIO_FORMATS
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         audio_file = request.FILES['test_audio_file']
+        file_extension = get_audio_format(audio_file.name)
         
         # Validate file extension
-        if not audio_file.name.lower().endswith(('.wav', '.m4a')):
+        if file_extension not in SUPPORTED_AUDIO_FORMATS:
             return Response(
-                {'error': 'Only WAV and M4A formats are supported for testing'},
+                {
+                    'error': f'Unsupported audio format: {file_extension}',
+                    'supported_formats': SUPPORTED_AUDIO_FORMATS
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Save uploaded file temporarily
-        # temp_dir = '/tmp'
+        # Process audio file (convert if necessary)
         temp_dir = tempfile.gettempdir()
-        temp_file_path = os.path.join(temp_dir, f"test_audio_{int(time.time())}_{audio_file.name}")
-        
-        with open(temp_file_path, 'wb+') as destination:
-            for chunk in audio_file.chunks():
-                destination.write(chunk)
+        try:
+            wav_file_path, needs_cleanup = process_audio_file(audio_file, temp_dir)
+        except Exception as e:
+            return Response(
+                {
+                    'error': f'Audio processing failed: {str(e)}',
+                    'original_format': file_extension
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         # Make prediction
-        prediction_result = analyzer.predict(temp_file_path)
+        prediction_result = analyzer.predict(wav_file_path)
         
         # Clean up temp file
-        try:
-            os.remove(temp_file_path)
-        except:
-            pass
+        if needs_cleanup:
+            try:
+                os.remove(wav_file_path)
+            except:
+                pass
         
         processing_time = time.time() - start_time
         
@@ -236,12 +458,15 @@ def test_audio_prediction_upload(request):
         
         logger.info(f"Test audio prediction completed: "
                    f"file={audio_file.name}, "
+                   f"original_format={file_extension}, "
                    f"class={prediction_result['state']}, "
                    f"confidence={prediction_result['confidence']:.2f}")
         
         return Response({
             'test_file_name': audio_file.name,
             'test_file_size': audio_file.size,
+            'original_format': file_extension,
+            'converted_to_wav': file_extension != '.wav',
             'predicted_class': prediction_result['state'],
             'confidence': prediction_result['confidence'],
             'probabilities': prediction_result['probabilities'],
@@ -260,7 +485,7 @@ def test_audio_prediction_upload(request):
 @permission_classes([IsAuthenticated])
 def analyze_audio(request):
     """
-    Analyze audio data and return baby state prediction (original functionality)
+    Analyze audio data and return baby state prediction (original functionality with conversion support)
     """
     start_time = time.time()
 
@@ -288,6 +513,27 @@ def analyze_audio(request):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # Check if audio file needs conversion
+        file_extension = get_audio_format(audio_data)
+        processed_audio_path = audio_data
+        needs_cleanup = False
+        
+        if file_extension != '.wav' and os.path.exists(audio_data):
+            # Convert to WAV
+            temp_dir = tempfile.gettempdir()
+            processed_audio_path = os.path.join(temp_dir, f"analyze_converted_{int(time.time())}.wav")
+            try:
+                convert_audio_to_wav(audio_data, processed_audio_path)
+                needs_cleanup = True
+            except Exception as e:
+                return Response(
+                    {
+                        'error': f'Failed to convert audio file: {str(e)}',
+                        'original_format': file_extension
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         # Get or create active audio session
         audio_session, created = AudioSession.objects.get_or_create(
             baby=baby,
@@ -296,7 +542,14 @@ def analyze_audio(request):
         )
         
         # Analyze audio using ML model
-        analysis_result = analyzer.analyze(audio_data)
+        analysis_result = analyzer.analyze(processed_audio_path)
+        
+        # Clean up converted file if needed
+        if needs_cleanup:
+            try:
+                os.remove(processed_audio_path)
+            except:
+                pass
         
         # Get or create a default device for this baby
         device, _ = Device.objects.get_or_create(
@@ -333,6 +586,7 @@ def analyze_audio(request):
         
         # Log the analysis
         logger.info(f"Audio analysis completed for baby {baby_id}: "
+                   f"original_format={file_extension}, "
                    f"state={analysis_result['state']}, "
                    f"confidence={analysis_result['confidence']:.2f}, "
                    f"processing_time={processing_time:.3f}s")
@@ -344,7 +598,9 @@ def analyze_audio(request):
             'timestamp': sensor_data.timestamp.isoformat(),
             'processing_time': round(processing_time, 3),
             'probabilities': analysis_result['probabilities'],
-            'session_id': str(audio_session.id)
+            'session_id': str(audio_session.id),
+            'original_format': file_extension,
+            'converted_to_wav': file_extension != '.wav'
         })
         
     except Exception as e:
@@ -367,12 +623,28 @@ def health_check(request):
         # Check if ML model is loaded
         model_status = "loaded" if analyzer.model is not None else "not_loaded"
         
+        # Check audio conversion capabilities
+        conversion_methods = []
+        try:
+            import pydub
+            conversion_methods.append("pydub")
+        except ImportError:
+            pass
+        
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
+            conversion_methods.append("ffmpeg")
+        except:
+            pass
+        
         return Response({
             'status': 'healthy',
             'database': 'connected',
             'ml_model': model_status,
             'model_path': analyzer.model_path,
             'class_names': analyzer.class_names,
+            'supported_audio_formats': SUPPORTED_AUDIO_FORMATS,
+            'conversion_methods': conversion_methods,
             'timestamp': timezone.now().isoformat()
         })
     except Exception as e:
