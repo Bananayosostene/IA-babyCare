@@ -36,6 +36,7 @@ class User(models.Model):
     updatedAt = models.DateTimeField(auto_now=True)
 
     class Meta:
+        managed = False 
         db_table = 'User'
 
 class Baby(models.Model):
@@ -49,6 +50,7 @@ class Baby(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        managed = False 
         db_table = 'Baby'
 
 class Device(models.Model):
@@ -63,6 +65,7 @@ class Device(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        managed = False 
         db_table = 'Device'
 
 class AudioSession(models.Model):
@@ -76,6 +79,7 @@ class AudioSession(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        managed = False 
         db_table = 'AudioSession'
 
 class SensorData(models.Model):
@@ -88,6 +92,7 @@ class SensorData(models.Model):
     audio_session = models.ForeignKey(AudioSession, on_delete=models.CASCADE, null=True, blank=True)
 
     class Meta:
+        managed = False 
         db_table = 'SensorData'
         indexes = [
             models.Index(fields=['baby', 'timestamp']),

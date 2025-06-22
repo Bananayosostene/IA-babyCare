@@ -9,7 +9,7 @@ from scipy.io import wavfile
 logger = logging.getLogger(__name__)
 
 class AudioAnalyzer:
-    def __init__(self, model_path="/models/model.keras"):
+    def __init__(self, model_path="/models/sound_model.keras"):
         self.model_path = model_path
         self.model = None
         self.class_names = ['cry', 'hungry', 'laugh', 'noise', 'silence']
