@@ -2,13 +2,17 @@ services:
   - type: web
     name: baby-monitor-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: daphne -b 0.0.0.0 -p 10000 baby_monitor.asgi:application
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+    startCommand: daphne -b 0.0.0.0 -p $PORT baby_monitor.asgi:application
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: baby_monitor.settings
       - key: SECRET_KEY
-        value: your-production-secret
+        value: 4w56cOmlai7IIBameMhQNB7KNpKp9-OkvElPWoMxz6prEve0KMzBGfSRtCSfynKuE_U
       - key: DEBUG
         value: "False"
+      - key: REDIS_URL
+        value: redis://default:RsiApDKnr38BB3ZwdJjrfuAmlBskN40E@redis-18682.c14.us-east-1-3.ec2.redns.redis-cloud.com:18682
     autoDeploy: true
