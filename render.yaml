@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: baby-monitor-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: daphne -b 0.0.0.0 -p 10000 baby_monitor.asgi:application
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: baby_monitor.settings
+      - key: SECRET_KEY
+        value: your-production-secret
+      - key: DEBUG
+        value: "False"
+    autoDeploy: true
